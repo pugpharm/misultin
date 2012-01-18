@@ -69,10 +69,44 @@ DOCUMENTATION
 API Documentation is available online on the Misultin's wiki: https://github.com/ostinelli/misultin/wiki
 
 
+SSL NOTES
+==========================================================================================================
+If you are running misultin behind an SSL terminator such as stunnel or stud, then set 
+ {ws_force_ssl, true} 
+so that websocket handshakes work.
+
+If you are using stunnel to terminate, you can also set
+ {proxy_protocol, true}
+to make misultin expect a PROXY.. line as per http://haproxy.1wt.eu/download/1.5/doc/proxy-protocol.txt
+Newer versions of stunnel support this with the "protocol = proxy" config option.
+
+
 CHANGELOG
 ==========================================================================================================
-0.8-dev:
-       - Misultin has been redesigned to use supervisor behaviours where appropriate, to be more OTP
+
+0.9-dev:
+       - added SESSIONS state, persistent across requests
+       - added access log callback function, so that main application can log HTTP access
+       - added streaming input for big files or endless input, using a manual body_recv function in
+         conjunction with the {auto_recv_body, false} option
+       - added static directory support, so that GET requests to /static/* can automatically send files
+         from a specified directory (thanks to egobrain suggestion)
+       - consistently improved memory usage by not copying by default to handler processes the full request
+         or websocket record
+       - added configuration option to set which websocket versions must be supported by the server
+       - added support for websocket draft-hybi-10
+       - added support for websocket draft-hybi-17 (thanks to RJ)
+       - added support for websockets on FireFox (thanks to Egobrain)
+       - added support for 'If-Modified-Since' headers in file sending (thanks to davidgaleano)
+       - added support for websockets when behind stunnel with {external_ssl, boolean()} option (thanks to
+         RJ)
+       - added support to see the correct client IP when behind stunnel, according to
+         <http://haproxy.1wt.eu/download/1.5/doc/proxy-protocol.txt> (thanks to RJ)
+       - added support for OPTIONS method (thanks to majek)
+       - rebar-ized makefile
+       - corrected minor bugs (thank you all - you know who you are!)
+
+0.8:   - Misultin has been redesigned to use supervisor behaviours where appropriate, to be more OTP
          compliant
        - added Cookie support
        - added preliminary support multipart/form-data and a file upload example [thanks to Max Lapshin]
@@ -84,6 +118,8 @@ CHANGELOG
        - solved bug on large data being sent over via websockets [thanks to omarkj]
        - corrected binary sending bug in websockets which would fail binaries on io_lib format [thanks to
          normanb]
+       - added recbuf advanced option [issue #40]
+       - added preliminary test suite
        - various optimizations using binary when needed
 
 0.7.1: - considerably improved stability under heavy load

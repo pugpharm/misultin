@@ -32,9 +32,10 @@
 % ==========================================================================================================
 -module(misultin_acceptors_sup).
 -behaviour(supervisor).
+-vsn("0.9-dev").
 
 % API
--export([start_link/1]).
+-export([start_link/7]).
 
 % supervisor callbacks
 -export([init/1]).
@@ -45,11 +46,18 @@
 % ============================ \/ API ======================================================================
 
 % ----------------------------------------------------------------------------------------------------------
-% Function: start_link() -> {ok,Pid} | ignore | {error,Error}
-% Description: Starts the supervisor
+% Starts the supervisor
 % ----------------------------------------------------------------------------------------------------------
-start_link(Options) ->
-	supervisor:start_link(?MODULE, Options).
+-spec start_link(
+	MainSupRef::pid(),
+	Port::non_neg_integer(),
+	OptionsTcp::[misultin_option_tcp()],
+	AcceptorsPoolsize::non_neg_integer(),
+	RecvTimeout::non_neg_integer(),
+	SocketMode::socketmode(),
+	CustomOpts::#custom_opts{}) -> {ok, Pid::pid()}.
+start_link(MainSupRef, Port, OptionsTcp, AcceptorsPoolsize, RecvTimeout, SocketMode, CustomOpts) ->
+	supervisor:start_link(?MODULE, {MainSupRef, Port, OptionsTcp, AcceptorsPoolsize, RecvTimeout, SocketMode, CustomOpts}).
 	
 % ============================ /\ API ======================================================================
 
@@ -60,13 +68,20 @@ start_link(Options) ->
 % Function: -> {ok,  {SupFlags,  [ChildSpec]}} | ignore | {error, Reason}
 % Description: Starts the supervisor
 % ----------------------------------------------------------------------------------------------------------
-init([MainSupRef, Port, OptionsTcp, AcceptorsPoolsize, RecvTimeout, SocketMode, CustomOpts]) ->
+-spec init({
+	MainSupRef::pid(),
+	Port::non_neg_integer(),
+	OptionsTcp::[misultin_option_tcp()],
+	AcceptorsPoolsize::non_neg_integer(),
+	RecvTimeout::non_neg_integer(),
+	SocketMode::socketmode(),
+	CustomOpts::#custom_opts{} }) -> {ok, term()} | {error, Reason::term()}.
+init({MainSupRef, Port, OptionsTcp, AcceptorsPoolsize, RecvTimeout, SocketMode, CustomOpts}) ->
 	?LOG_DEBUG("starting listening ~p socket with options ~p on port ~p", [SocketMode, OptionsTcp, Port]),
 	case misultin_socket:listen(Port, OptionsTcp, SocketMode) of
 		{ok, ListenSocket} ->
 			Acceptors = [
-				{{acceptor, N}, {misultin_acceptor, start_link, [MainSupRef, ListenSocket, Port, RecvTimeout, SocketMode, CustomOpts]},
-				permanent, brutal_kill, worker, dynamic}
+				{{acceptor, N}, {misultin_acceptor, start_link, [MainSupRef, ListenSocket, Port, RecvTimeout, SocketMode, CustomOpts]}, permanent, brutal_kill, worker, [misultin_acceptor]}
 				|| N <- lists:seq(1, AcceptorsPoolsize)
 			],
 			{ok, {{one_for_one, 5, 10}, Acceptors}};

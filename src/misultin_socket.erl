@@ -31,7 +31,7 @@
 % POSSIBILITY OF SUCH DAMAGE.
 % ==========================================================================================================
 -module(misultin_socket).
--vsn("0.8-dev").
+-vsn("0.9-dev").
 
 % API
 -export([listen/3, accept/2, controlling_process/3, peername/2, peercert/2, setopts/3, recv/4, send/3, close/2]).
@@ -43,10 +43,12 @@
 % ============================ \/ API ======================================================================
 
 % socket listen
+-spec listen(Port::non_neg_integer(), Options::gen_proplist(), socketmode()) -> {ok, ListenSock::socket()} | {error, Reason::term()}.
 listen(Port, Options, http) -> gen_tcp:listen(Port, Options);
 listen(Port, Options, ssl) -> ssl:listen(Port, Options).
 
 % socket accept
+-spec accept(ListenSocket::socket(), socketmode()) -> {ok, ListenSock::socket()} | {error, Reason::term()}.
 accept(ListenSocket, http) -> gen_tcp:accept(ListenSocket);
 accept(ListenSocket, ssl) ->
 	try ssl:transport_accept(ListenSocket)
@@ -56,11 +58,12 @@ accept(ListenSocket, ssl) ->
 	end.					
 
 % socket controlling process
+-spec controlling_process(Sock::socket(), Pid::pid(), socketmode()) -> ok | {error, Reason::term()}.
 controlling_process(Sock, Pid, http) -> gen_tcp:controlling_process(Sock, Pid);
 controlling_process(Sock, Pid, ssl) -> ssl:controlling_process(Sock, Pid).
 
-% Function: -> {PeerAddr, PeerPort} | PeerAddr = list() | undefined | PeerPort = integer() | undefined
-% Description: Get socket peername
+% Get socket peername
+-spec peername(Sock::socket(), socketmode() | function()) -> {inet:ip_address(), non_neg_integer()}.
 peername(Sock, http) -> peername(Sock, fun inet:peername/1);
 peername(Sock, ssl) -> peername(Sock, fun ssl:peername/1);
 peername(Sock, F) ->
@@ -71,8 +74,8 @@ peername(Sock, F) ->
 			{undefined, undefined}
 	end.
 
-% Function: -> Certificate | undefined
-% Description: Get socket certificate
+% Get socket certificate
+-spec peercert(Sock::socket(), socketmode()) -> Cert::term() | undefined.
 peercert(_Sock, http) -> undefined;
 peercert(Sock, ssl) ->
 	case ssl:peercert(Sock) of
@@ -81,14 +84,17 @@ peercert(Sock, ssl) ->
 	end.
 
 % socket set options
+-spec setopts(Sock::socket(), Options::gen_proplist_options(), socketmode()) -> ok | {error, Reason::term()}.
 setopts(Sock, Options, http) -> inet:setopts(Sock, Options);
 setopts(Sock, Options, ssl) -> ssl:setopts(Sock, Options).
 
 % socket receive
+-spec recv(Sock::socket(), Len::non_neg_integer(), RecvTimeout::non_neg_integer(), socketmode()) -> {ok, Data::list() | binary()} | {error, Reason::term()}.
 recv(Sock, Len, RecvTimeout, http) -> gen_tcp:recv(Sock, Len, RecvTimeout);
 recv(Sock, Len, RecvTimeout, ssl) -> ssl:recv(Sock, Len, RecvTimeout).
 
 % socket send
+-spec send(Sock::socket(), Data::binary() | iolist() | list(), socketmode() | function()) -> ok.
 send(Sock, Data, http) -> send(Sock, Data, fun gen_tcp:send/2);
 send(Sock, Data, ssl) -> send(Sock, Data, fun ssl:send/2);
 send(Sock, Data, F) -> 
@@ -98,10 +104,11 @@ send(Sock, Data, F) ->
 			ok;
 		{error, _Reason} ->
 			?LOG_ERROR("error sending data: ~p", [_Reason]),
-			exit(normal)
+			exit(kill)
 	end.
 
 % TCP close
+-spec close(Sock::socket(), socketmode() | function()) -> ok.
 close(Sock, http) -> close(Sock, fun gen_tcp:close/1);
 close(Sock, ssl) -> close(Sock, fun ssl:close/1);
 close(Sock, F) ->
@@ -111,7 +118,7 @@ close(Sock, F) ->
 			ok;
 		_Else ->
 			?LOG_WARNING("could not close socket: ~p", [_Else]),
-			exit(normal)
+			exit(kill)
 	end.
 
 % ============================ /\ API ======================================================================

@@ -1,5 +1,5 @@
 % ==========================================================================================================
-% MISULTIN - Example: Show how to set/retrieve cookies.
+% MISULTIN - Example: static directory support.
 %
 % >-|-|-(°>
 % 
@@ -27,27 +27,22 @@
 % NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 % POSSIBILITY OF SUCH DAMAGE.
 % ==========================================================================================================
--module(misultin_cookies_example).
+-module(misultin_static).
 -export([start/1, stop/0]).
 
-% start misultin http server
+% start misultin http server, with a static option
+% all files under the specified directory /var/www/static will be automatically served.
 start(Port) ->
-	misultin:start_link([{port, Port}, {loop, fun(Req) -> handle_http(Req) end}]).
+	misultin:start_link([
+		{port, Port},
+		{static, "/var/www/static"},
+		{loop, fun(Req) -> handle_http(Req) end}
+	]).
 
 % stop misultin
 stop() ->
 	misultin:stop().
 
-% callback on request received
-handle_http(Req) ->	
-	% get cookies
-	Cookies = Req:get_cookies(),
-	case Req:get_cookie_value("misultin_test_cookie", Cookies) of
-		undefined ->
-			% no cookies preexists, create one that will expire in 365 days
-			Req:set_cookie("misultin_test_cookie", "value of the test cookie", [{max_age, 365*24*3600}]),
-			Req:ok("A cookie has been set. Refresh the browser to see it.");
-		CookieVal ->
-			Req:delete_cookie("misultin_test_cookie"),
-			Req:ok(["The set cookie value was set to \"", CookieVal,"\", and has now been removed. Refresh the browser to see this."])
-	end.
+% callback function called on incoming http request, if not a static request
+handle_http(Req) ->
+	Req:ok("Not a static file request.").

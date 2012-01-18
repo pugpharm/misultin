@@ -2,7 +2,7 @@
 % MISULTIN - Request
 %
 % >-|-|-(°>
-% 
+%
 % Copyright (C) 2011, Roberto Ostinelli <roberto@ostinelli.net>.
 % All rights reserved.
 %
@@ -10,7 +10,7 @@
 % <http://code.google.com/p/mochiweb/>
 %
 % BSD License
-% 
+%
 % Redistribution and use in source and binary forms, with or without modification, are permitted provided
 % that the following conditions are met:
 %
@@ -31,83 +31,72 @@
 % POSSIBILITY OF SUCH DAMAGE.
 % ==========================================================================================================
 -module(misultin_req).
--vsn("0.8-dev").
+-vsn("0.9-dev").
 
 % macros
--define(FILE_READ_BUFFER, 64*1012).
+-define(FILE_READ_BUFFER, 64*1024).
 
 % API
 -export([ok/2, ok/3, ok/4, respond/2, respond/3, respond/4, respond/5]).
--export([raw_headers_respond/2, raw_headers_respond/3, raw_headers_respond/4, raw_headers_respond/5]).
 -export([options/2]).
 -export([chunk/2, chunk/3, stream/2, stream/3, stream/4]).
--export([raw/1, get/2, get_cookies/1, get_cookie_value/3, set_cookie/3, set_cookie/4, delete_cookie/2]).
--export([parse_qs/1, parse_post/1, file/2, file/3, file/4, resource/2]).
+-export([raw/1, get/2]).
+-export([get_variable/3, get_cookies/1, get_cookie_value/3, set_cookie/3, set_cookie/4, delete_cookie/2]).
+-export([body_recv/1]).
+-export([session/1, session/2, save_session_state/3]).
+-export([uri_unquote/1, parse_qs/1, parse_qs/2, parse_post/1, parse_post/2, file/2, file/3, file/4, resource/2]).
 
 % includes
 -include("../include/misultin.hrl").
 -include_lib("kernel/include/file.hrl").
 
+% types
+-type reqt() :: {misultin_req, SocketPid::pid(), TableDateRef::ets:tid()}.
+
 
 % ============================ \/ API ======================================================================
 
-% Description: Returns raw request content.
-raw({misultin_req, Req, _SocketPid}) ->
-	Req.
+% Returns raw request content.
+-spec raw(reqt()) -> #req{}.
+raw({misultin_req, SocketPid, _TableDateRef}) ->
+	misultin_http:get_reqinfo(SocketPid, raw).
 
-% Description: Get request info.
-get(socket, {misultin_req, Req, _SocketPid}) ->
-	Req#req.socket;
-get(socket_mode, {misultin_req, Req, _SocketPid}) ->
-	Req#req.socket_mode;
-get(peer_addr, {misultin_req, #req{headers = Headers} = Req, _SocketPid}) ->
-	Host = case misultin_utility:get_key_value("X-Real-Ip", Headers) of
-		undefined ->
-			case misultin_utility:get_key_value("X-Forwarded-For", Headers) of
-				undefined -> undefined;
-				Hosts0 -> string:strip(lists:nth(1, string:tokens(Hosts0, ",")))
-			end;
-		Host0 -> Host0
-	end,
-	case Host of
-		undefined ->
-			Req#req.peer_addr;
-		_ -> 
-			case inet_parse:address(Host) of
-				{error, _Reason} ->
-					Req#req.peer_addr;
-				{ok, IpTuple} ->
-					IpTuple
-			end
-	end;
-get(peer_port, {misultin_req, Req, _SocketPid}) ->
-	Req#req.peer_port;
-get(peer_cert, {misultin_req, Req, _SocketPid}) ->
-	Req#req.peer_cert;
-get(connection, {misultin_req, Req, _SocketPid}) ->
-	Req#req.connection;
-get(content_length, {misultin_req, Req, _SocketPid}) ->
-	Req#req.content_length;
-get(vsn, {misultin_req, Req, _SocketPid}) ->
-	Req#req.vsn;
-get(method, {misultin_req, Req, _SocketPid}) ->
-	Req#req.method;
-get(uri, {misultin_req, Req, _SocketPid}) ->
-	Req#req.uri;
-get(uri_unquoted, {misultin_req, Req, _SocketPid}) ->
-	{_UriType, RawUri} = Req#req.uri,
-	misultin_utility:unquote(RawUri);
-get(args, {misultin_req, Req, _SocketPid}) ->
-	Req#req.args;
-get(headers, {misultin_req, Req, _SocketPid}) ->
-	Req#req.headers;
-get(body, {misultin_req, Req, _SocketPid}) ->
-	Req#req.body.
+% Get request info.
+-spec get(ReqInfo::atom(), reqt()) -> term().
+get(ReqInfo, {misultin_req, SocketPid, _TableDateRef}) when
+	ReqInfo =:= socket;
+	ReqInfo =:= socket_mode;
+	ReqInfo =:= peer_port;
+	ReqInfo =:= peer_cert;
+	ReqInfo =:= connection;
+	ReqInfo =:= content_length;
+	ReqInfo =:= vsn;
+	ReqInfo =:= method;
+	ReqInfo =:= uri;
+	ReqInfo =:= args;
+	ReqInfo =:= headers;
+	ReqInfo =:= body ->
+		misultin_http:get_reqinfo(SocketPid, ReqInfo);
+		
+get(peer_addr, {misultin_req, SocketPid, _TableDateRef}) ->
+	Headers = get(headers, {misultin_req, SocketPid, _TableDateRef}),
+	ConnectionPeerAddr = misultin_http:get_reqinfo(SocketPid, peer_addr),
+	misultin_utility:get_peer(Headers, ConnectionPeerAddr);
 
-% Function -> [Cookie, ...]
-%  Cookie = [{Tag, Value}]
-% Description: Get all cookies.
-get_cookies({misultin_req, #req{headers = Headers}, _SocketPid}) ->
+get(uri_unquoted, ReqT) ->
+	uri_unquote(get(uri, ReqT)).
+
+% Get the value of a single variable
+-spec get_variable(VarName::string(), Variables::gen_proplist(), reqt()) -> undefined | string().
+get_variable(VarName, Variables, _ReqT) ->
+	misultin_utility:get_key_value(VarName, Variables).
+
+% ---------------------------- \/ Cookies ------------------------------------------------------------------
+
+% Get all cookies.
+-spec get_cookies(reqt()) -> gen_proplist().
+get_cookies(ReqT) ->
+	Headers = get(headers, ReqT),
 	case misultin_utility:get_key_value('Cookie', Headers) of
 		undefined -> [];
 		CookieContent ->
@@ -117,22 +106,68 @@ get_cookies({misultin_req, #req{headers = Headers}, _SocketPid}) ->
 			lists:foldl(F, [], misultin_cookies:parse_cookie(CookieContent))
 	end.
 
-% Function -> CookieValue | undefined
-% Description: Get the value of a single cookie
+% Get the value of a single cookie
+-spec get_cookie_value(CookieTag::string(), Cookies::gen_proplist(), reqt()) -> undefined | string().
 get_cookie_value(CookieTag, Cookies, _ReqT) ->
 	misultin_utility:get_key_value(CookieTag, Cookies).
-	
-% set cookie
-set_cookie(Key, Value, _ReqT) ->
-	set_cookie(Key, Value, []).
-set_cookie(Key, Value, Options, _ReqT) ->
-	misultin_cookies:set_cookie(Key, Value, Options).
-	
-% delete cookie
-delete_cookie(Key, _ReqT) ->
-	misultin_cookies:delete_cookie(Key).
 
-% Description: Formats a 200 response.
+% set cookie
+-spec set_cookie(Key::string(), Value::string(), reqt()) -> ok.
+-spec set_cookie(Key::string(), Value::string(), Options::cookies_options(), reqt()) -> ok.
+set_cookie(Key, Value, _ReqT) ->
+	set_cookie(Key, Value, [], _ReqT).
+set_cookie(Key, Value, Options, {misultin_req, SocketPid, _TableDateRef}) ->
+	SocketPid ! {set_cookie, misultin_cookies:set_cookie(Key, Value, Options)},
+	ok.		% retro-compatibility: 'ok' atom gets ignored by enc_headers/1 in case set_cookie is used inside Req headers
+
+% delete cookie
+-spec delete_cookie(Key::string(), reqt()) -> ok.
+delete_cookie(Key, {misultin_req, SocketPid, _TableDateRef}) ->
+	SocketPid ! {set_cookie, misultin_cookies:delete_cookie(Key)},
+	ok.		% retro-compatibility: 'ok' atom gets ignored by enc_headers/1 in case set_cookie is used inside Req headers
+
+% ---------------------------- /\ Cookies ------------------------------------------------------------------
+
+% ---------------------------- \/ Sessions -----------------------------------------------------------------
+
+% get session id and state
+-spec session(ReqT::reqt()) -> {error, Reason::term()} | {SessionId::string(), SessionState::term()}.
+-spec session(Cookies::gen_proplist(), ReqT::reqt()) -> {error, Reason::term()} | {SessionId::string(), SessionState::term()}.
+session(ReqT) ->
+	Cookies = get_cookies(ReqT),
+	session(Cookies, ReqT).
+session(Cookies, {misultin_req, SocketPid, _TableDateRef}) ->
+	misultin_http:session_cmd(SocketPid, {session, Cookies}).
+
+% save session state
+-spec save_session_state(SessionId::string(), SessionState::term(), ReqT::reqt()) -> {error, Reason::term()} | ok.
+save_session_state(SessionId, SessionState, {misultin_req, SocketPid, _TableDateRef}) ->
+	misultin_http:session_cmd(SocketPid, {save_session_state, SessionId, SessionState}).
+
+% ---------------------------- /\ Sessions ------------------------------------------------------------------
+
+% ---------------------------- \/ Options ------------------------------------------------------------------
+
+% set advanced options valid for a single request
+-spec options(Options::gen_proplist(), reqt()) -> ok.
+options(Options, ReqT) when is_list(Options) ->
+	% loop options and apply
+	lists:foreach(fun({OptionTag, OptionVal}) -> options_set(OptionTag, OptionVal, ReqT) end, Options).
+% set to comet mode
+-spec options_set(OptionName::atom(), OptionVal::term(), reqt()) -> term().
+options_set(comet, OptionVal, {misultin_req, SocketPid, _TableDateRef}) when OptionVal =:= true; OptionVal =:= false ->
+	SocketPid ! {set_option, {comet, OptionVal}};
+options_set(_OptionTag, _OptionVal, _ReqT)	->
+	% ignore
+	?LOG_DEBUG("ignoring advanced option ~p", [{_OptionTag, _OptionVal}]),
+	ignore.
+	
+% ---------------------------- /\ Options ------------------------------------------------------------------
+
+% Formats a 200 response.
+-spec ok(Template::list() | binary() | iolist(), reqt()) -> term().
+-spec ok(Headers::http_headers(), Template::list() | binary() | iolist(), reqt()) -> term().
+-spec ok(Headers::http_headers(), Template::list(), Vars::[term()], reqt()) -> term().
 ok(Template, ReqT) ->
 	ok([], Template, ReqT).
 ok(Headers, Template, ReqT) ->
@@ -140,45 +175,33 @@ ok(Headers, Template, ReqT) ->
 ok(Headers, Template, Vars, ReqT) ->
 	respond(200, Headers, Template, Vars, ReqT).
 
-% Description: Formats a response.
+% Formats a response.
+-spec respond(HttpCode::non_neg_integer(), reqt()) -> term().
+-spec respond(HttpCode::non_neg_integer(), Template::list() | binary() | iolist(), reqt()) -> term().
+-spec respond(HttpCode::non_neg_integer(), Headers::http_headers(), Template::list() | binary() | iolist(), reqt()) -> term().
+-spec respond(HttpCode::non_neg_integer(), Headers::http_headers(), Template::list(), Vars::[term()], reqt()) -> term().
 respond(HttpCode, ReqT) ->
 	respond(HttpCode, [], [], ReqT).
 respond(HttpCode, Template, ReqT) ->
 	respond(HttpCode, [], Template, ReqT).
-respond(HttpCode, Headers, Template, {misultin_req, _Req, SocketPid}) ->
+respond(HttpCode, Headers, Template, {misultin_req, SocketPid, _TableDateRef}) ->
 	SocketPid ! {response, HttpCode, Headers, Template}.
-respond(HttpCode, Headers, Template, Vars, {misultin_req, _Req, SocketPid}) when is_list(Template) =:= true ->
+respond(HttpCode, Headers, Template, Vars, {misultin_req, SocketPid, _TableDateRef}) when is_list(Template) =:= true ->
 	SocketPid ! {response, HttpCode, Headers, io_lib:format(Template, Vars)}.
-	
-% Description: Allow to add already formatted headers, untouched
-raw_headers_respond(Body, ReqT) ->
-	raw_headers_respond(200, [], [], Body, ReqT).
-raw_headers_respond(HeadersStr, Body, ReqT) ->
-	raw_headers_respond(200, [], HeadersStr, Body, ReqT).
-raw_headers_respond(HttpCode, HeadersStr, Body, ReqT) ->
-	raw_headers_respond(HttpCode, [], HeadersStr, Body, ReqT).
-raw_headers_respond(HttpCode, Headers, HeadersStr, Body, {misultin_req, _Req, SocketPid}) ->
-	SocketPid ! {response, HttpCode, {Headers, HeadersStr}, Body}.
 
-% set advanced options valid for a single request
-options(Options, ReqT) when is_list(Options) ->
-	% loop options and apply
-	lists:foreach(fun({OptionTag, OptionVal}) -> options_set(OptionTag, OptionVal, ReqT) end, Options).
-% set to comet mode
-options_set(comet, OptionVal, {misultin_req, _Req, SocketPid}) when OptionVal =:= true; OptionVal =:= false ->
-	SocketPid ! {set_option, {comet, OptionVal}};
-options_set(_OptionTag, _OptionVal, {misultin_req, _Req, _SocketPid})	->
-	% ignore
-	?LOG_DEBUG("ignoring advanced option ~p for request ~p", [{_OptionTag, _OptionVal}, _Req]),
-	ignore.
-
-% Description: Chunked Transfer-Encoding.
+% Chunked Transfer-Encoding.
+-spec chunk
+	(head | done, reqt()) -> term();
+	(Template::string() | binary() | iolist(), reqt()) -> term().
+-spec chunk
+	(head, Headers::http_headers(), reqt()) -> term();
+	(Template::string(), Vars::[term()], reqt()) -> term().
 chunk(head, ReqT) ->
 	chunk(head, [], ReqT);
 chunk(done, ReqT) ->
 	stream("0\r\n\r\n", ReqT);
 chunk(Template, ReqT) ->
-	chunk(Template, [], ReqT).
+	chunk_send(Template, ReqT).
 chunk(head, Headers, ReqT) ->
 	% add Transfer-Encoding chunked header if needed
 	Headers0 = case misultin_utility:header_get_value('Transfer-Encoding', Headers) of
@@ -186,39 +209,59 @@ chunk(head, Headers, ReqT) ->
 		_ -> Headers
 	end,
 	stream(head, Headers0, ReqT);
-chunk(Template, [], ReqT) ->
-	chunk_send(Template, ReqT);
 chunk(Template, Vars, ReqT) ->
 	chunk_send(io_lib:format(Template, Vars), ReqT).
-chunk_send(Data, ReqT) ->	
+
+-spec chunk_send(Data::string() | binary() | iolist(), reqt()) -> term().
+chunk_send(Data, ReqT) ->
 	stream([erlang:integer_to_list(erlang:iolist_size(Data), 16), "\r\n", Data, "\r\n"], ReqT).
-	
-% Description: Stream support.
-stream(close, {misultin_req, _Req, SocketPid}) ->
+
+% Stream support.
+-spec stream
+	(close | head | {error, Reason::term()}, reqt()) -> term();
+	(Data::string() | binary() | iolist(), reqt()) -> term().
+-spec stream
+	(head, Headers::http_headers(), reqt()) -> term();
+	(Template::string(), Vars::[term()], reqt()) -> term().
+-spec stream
+	(head, HttpCode::non_neg_integer(), Headers::http_headers(), reqt()) -> term().
+stream(close, {misultin_req, SocketPid, _TableDateRef}) ->
 	SocketPid ! stream_close;
 stream(head, ReqT) ->
 	stream(head, 200, [], ReqT);
-stream({error, Reason}, {misultin_req, _Req, SocketPid}) ->
+stream({error, Reason}, {misultin_req, SocketPid, _TableDateRef}) ->
 	SocketPid ! {stream_error, Reason};
-stream(Data, {misultin_req, _Req, SocketPid}) ->
+stream(Data, {misultin_req, SocketPid, _TableDateRef}) ->
 	catch SocketPid ! {stream_data, Data}.
 stream(head, Headers, ReqT) ->
 	stream(head, 200, Headers, ReqT);
-stream(Template, Vars, {misultin_req, _Req, SocketPid}) when is_list(Template) =:= true ->
+stream(Template, Vars, {misultin_req, SocketPid, _TableDateRef}) when is_list(Template) =:= true ->
 	catch SocketPid ! {stream_data, io_lib:format(Template, Vars)}.
-stream(head, HttpCode, Headers, {misultin_req, _Req, SocketPid}) ->
+stream(head, HttpCode, Headers, {misultin_req, SocketPid, _TableDateRef}) ->
 	catch SocketPid ! {stream_head, HttpCode, Headers}.
-	
-% Description: Sends a file to the browser.
+
+% manual recv body
+-spec body_recv(reqt()) -> {ok | chunk, Body::binary()} | end_of_chunks | {error, Reason::term()}.
+body_recv({misultin_req, SocketPid, _TableDateRef}) ->
+	misultin_http:body_recv(SocketPid).
+
+% Sends a file to the browser.
+-spec file
+	(FilePath::string(), reqt()) -> term().
+-spec file
+	(attachment, FilePath::string(), reqt()) -> term();
+	(FilePath::string(), Headers::http_headers(), reqt()) -> term().
+-spec file
+	(attachment, FilePath::string(), Headers::http_headers(), reqt()) -> term().
 file(FilePath, ReqT) ->
 	file_send(FilePath, [], ReqT).
-% Description: Sends a file for download.	
+% Sends a file for download.
 file(attachment, FilePath, ReqT) ->
 	file(attachment, FilePath, [], ReqT);
-% Description: Sends a file to the browser with the given headers.
+% Sends a file to the browser with the given headers.
 file(FilePath, Headers, ReqT) ->
 	file_send(FilePath, Headers, ReqT).
-% Description: Sends a file for download with the given headers.
+% Sends a file for download with the given headers.
 file(attachment, FilePath, Headers, ReqT) ->
 	% get filename
 	FileName = filename:basename(FilePath),
@@ -229,34 +272,56 @@ file(attachment, FilePath, Headers, ReqT) ->
 	end,
 	file_send(FilePath, Headers0, ReqT).
 
-% Description: Parse QueryString
-parse_qs({misultin_req, Req, _SocketPid}) ->
-	misultin_utility:parse_qs(Req#req.args).
+% unquote uri
+-spec uri_unquote({UriType::atom(), RawUri::list()}) -> undefined | list().
+uri_unquote({_UriType, RawUri}) ->
+	misultin_utility:unquote(RawUri);
+uri_unquote(_) ->
+	undefined.
 
-% Description: Parse Post
-parse_post({misultin_req, Req, _SocketPid}) ->
+% Parse QueryString
+-spec parse_qs(reqt()) -> [{Key::string(), Value::string()}].
+-spec parse_qs(Option::utf8 | unicode, reqt()) -> [{Key::string(), Value::string()}].
+parse_qs(ReqT) ->
+	parse_qs(utf8, ReqT).
+parse_qs(Option, ReqT) ->
+	Args = get(args, ReqT),
+	misultin_utility:parse_qs(Args, Option).
+
+% Parse Post
+-spec parse_post(reqt()) -> binary() | [{Id::string(), Attributes::gen_proplist(), Data::binary()}].
+-spec parse_post(Option::utf8 | unicode, reqt()) -> binary() | [{Id::string(), Attributes::gen_proplist(), Data::binary()}].
+parse_post(ReqT) ->
+	parse_post(utf8, ReqT).
+parse_post(Option, ReqT) ->
 	% get header confirmation
-	case misultin_utility:header_get_value('Content-Type', Req#req.headers) of
+	Headers = get(headers, ReqT),
+	case misultin_utility:header_get_value('Content-Type', Headers) of
 		false ->
 			[];
 		ContentType ->
 			[Type|Modificator] = string:tokens(ContentType, ";"),
 			case Type of
+			    "application/octet-stream" ->
+			        get(body, ReqT);
 				"application/x-www-form-urlencoded" ->
-					misultin_utility:parse_qs(Req#req.body);
+					Body = get(body, ReqT),
+					misultin_utility:parse_qs(Body, Option);
 				"multipart/form-data" ->
 					[Modificator0] = Modificator,
 					"boundary=" ++ Boundary = string:strip(Modificator0),
-					parse_multipart_form_data(Req#req.body, list_to_binary(Boundary));
+					Body = get(body, ReqT),
+					parse_multipart_form_data(Body, list_to_binary(Boundary));
 				_Other ->
 					[]
 			end
 	end.
 
-% Description: Sets resource elements for restful services.
-resource(Options, {misultin_req, Req, _SocketPid}) when is_list(Options) ->
+% Sets resource elements for restful services.
+-spec resource(Options::[term()], reqt()) -> [string()].
+resource(Options, ReqT) when is_list(Options) ->
 	% clean uri
-	{_UriType, RawUri} = Req#req.uri,
+	RawUri = get(uri_unquoted, ReqT),
 	Uri = lists:foldl(fun(Option, Acc) -> clean_uri(Option, Acc) end, RawUri, Options),
 	% split
 	string:tokens(Uri, "/").
@@ -264,47 +329,59 @@ resource(Options, {misultin_req, Req, _SocketPid}) when is_list(Options) ->
 % ============================ /\ API ======================================================================
 
 
-
 % ============================ \/ INTERNAL FUNCTIONS =======================================================
 
-% Description: Clean URI.
+% Clean URI.
+-spec clean_uri(Option::atom(), Uri::string()) -> string().
 clean_uri(lowercase, Uri) ->
 	string:to_lower(Uri);
 clean_uri(urldecode, Uri) ->
-	misultin_utility:unquote(Uri);	
+	misultin_utility:unquote(Uri);
 % ignore unexisting option
 clean_uri(_Unavailable, Uri) ->
 	Uri.
 
 % sending of a file
+-spec file_send(FilePath::string(), Headers::http_headers(), reqt()) -> term().
 file_send(FilePath, Headers, ReqT) ->
 	% get file size
 	case file:read_file_info(FilePath) of
 		{ok, FileInfo} ->
-			% get filesize
-			FileSize = FileInfo#file_info.size,
-			% do the gradual sending
-			case file_open_and_send(FilePath, FileSize, Headers, ReqT) of
-				{error, Reason} ->
-					stream({error, Reason}, ReqT);
-				ok ->
-					% sending successful
-					ok
+			% get if modified since header
+			IfModifiedSince = misultin_utility:get_key_value('If-Modified-Since', get(headers, ReqT)),
+			% get file modified time
+			FileModifiedTime = httpd_util:rfc1123_date(FileInfo#file_info.mtime),
+			case IfModifiedSince of
+				FileModifiedTime ->
+					% file has not been modified
+					respond(304, ReqT);
+				_ ->
+					% file has been modified, get filesize
+					FileSize = FileInfo#file_info.size,
+					% do the gradual sending
+					case file_open_and_send(FilePath, FileSize, FileModifiedTime, Headers, ReqT) of
+				        {error, Reason} ->
+				        	stream({error, Reason}, ReqT);
+				        ok ->
+				        	% sending successful
+				        	ok
+					end
 			end;
 		{error, _Reason} ->
 			% file not found or other errors
 			stream({error, 404}, ReqT)
 	end.
-file_open_and_send(FilePath, FileSize, Headers, ReqT) ->
+-spec file_open_and_send(FilePath::string(), FileSize::non_neg_integer(), FileModifiedTime::string(), Headers::http_headers(), reqt()) -> term().
+file_open_and_send(FilePath, FileSize, FileModifiedTime, Headers, {misultin_req, _SocketPid, TableDateRef} = ReqT) ->
 	case file:open(FilePath, [read, binary]) of
 		{error, Reason} ->
 			{error, Reason};
 		{ok, IoDevice} ->
 			% send headers
-			HeadersFull = [{'Content-Type', misultin_utility:get_content_type(FilePath)}, {'Content-Length', FileSize} | Headers],
+			HeadersFull = [{'Content-Type', misultin_utility:get_content_type(FilePath)}, {'Content-Length', FileSize}, {'Last-Modified', FileModifiedTime}, {'Expires', misultin_server:get_rfc_date(TableDateRef)} | Headers],
 			stream(head, HeadersFull, ReqT),
 			% read portions
-			case file_read_and_send(IoDevice, 0, ReqT) of 
+			case file_read_and_send(IoDevice, 0, ReqT) of
 				{error, Reason} ->
 					file:close(IoDevice),
 					{error, Reason};
@@ -313,6 +390,7 @@ file_open_and_send(FilePath, FileSize, Headers, ReqT) ->
 					ok
 			end
 	end.
+-spec file_read_and_send(IoDevice::file:io_device(), Position::non_neg_integer(), reqt()) -> term().
 file_read_and_send(IoDevice, Position, ReqT) ->
 	% read buffer
 	case file:pread(IoDevice, Position, ?FILE_READ_BUFFER) of
@@ -329,6 +407,7 @@ file_read_and_send(IoDevice, Position, ReqT) ->
 	end.
 
 % parse multipart data
+-spec parse_multipart_form_data(Body::binary(), Boundary::binary()) -> [{Id::string(), Attributes::gen_proplist(), Data::binary()}].
 parse_multipart_form_data(Body, Boundary) ->
 	[<<>> | Parts] = re:split(Body, <<"--", Boundary/binary>>),
 	F = fun
@@ -343,6 +422,7 @@ parse_multipart_form_data(Body, Boundary) ->
 			end
 	end,
 	lists:foldl(F, [], Parts).
+-spec parse_attributes(Attributes::string()) -> gen_proplist().
 parse_attributes(Attributes) ->
 	case re:run(Attributes, "([^\"=;\s]+)=\"([^\"]+)\"", [{capture, all_but_first, list}, ungreedy, dotall, global]) of
 		{match, Match} ->

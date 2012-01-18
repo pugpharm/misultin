@@ -1,5 +1,5 @@
 % ==========================================================================================================
-% MISULTIN - Example: Shows misultin Websocket support.
+% MISULTIN - Example: allow for body reading.
 %
 % >-|-|-(°>
 % 
@@ -27,74 +27,32 @@
 % NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 % POSSIBILITY OF SUCH DAMAGE.
 % ==========================================================================================================
--module(misultin_websocket_example).
+-module(misultin_body_recv).
 -export([start/1, stop/0]).
 
 % start misultin http server
 start(Port) ->
-	misultin:start_link([{port, Port}, {loop, fun(Req) -> handle_http(Req, Port) end}, {ws_loop, fun(Ws) -> handle_websocket(Ws) end}]).
+	misultin:start_link([{port, Port}, {auto_recv_body, false}, {loop, fun(Req) -> handle_http(Req) end}]).
 
 % stop misultin
 stop() ->
 	misultin:stop().
 
 % callback on request received
-handle_http(Req, Port) ->	
-	% output
-	Req:ok([{"Content-Type", "text/html"}],
-	["	
-	<html>
-		<head>
-			<script type=\"text/javascript\">
-				function addStatus(text){
-					var date = new Date();
-					document.getElementById('status').innerHTML = document.getElementById('status').innerHTML + date + \": \" + text + \"<br>\";				
-				}
-				function ready(){
-					var ws;
-					if (\"WebSocket\" in window) {
-						ws = new WebSocket(\"ws://localhost:", erlang:integer_to_list(Port) ,"/service\");
-					} else if (\"MozWebSocket\" in window) {
-						ws = new MozWebSocket(\"ws://localhost:", erlang:integer_to_list(Port) ,"/service\");
-					}
-					if (ws) {
-						// browser supports websockets
-						ws.onopen = function() {
-							// websocket is connected
-							addStatus(\"websocket connected!\");
-							// send hello data to server.
-							ws.send(\"hello server!\");
-							addStatus(\"sent message to server: 'hello server'!\");
-						};
-						ws.onmessage = function (evt) {
-							var receivedMsg = evt.data;
-							addStatus(\"server sent the following: '\" + receivedMsg + \"'\");
-						};
-						ws.onclose = function() {
-							// websocket was closed
-							addStatus(\"websocket was closed\");
-						};
-					} else {
-						// browser does not support websockets
-						addStatus(\"sorry, your browser does not support websockets.\");
-					}
-				}
-			</script>
-		</head>
-		<body onload=\"ready();\">
-			<div id=\"status\"></div>
-		</body>
-	</html>"]).
+handle_http(Req) ->
+	body_recv(Req, <<>>).
 
-% callback on received websockets data
-handle_websocket(Ws) ->
-	receive
-		{browser, Data} ->
-			Ws:send(["received '", Data, "'"]),
-			handle_websocket(Ws);
-		_Ignore ->
-			handle_websocket(Ws)
-	after 5000 ->
-		Ws:send("pushing!"),
-		handle_websocket(Ws)
+body_recv(Req, Acc) ->
+	case Req:body_recv() of
+		{ok, Body} ->
+			% received a full body, no streaming
+			Req:ok([], "received full body: ~p", [Body]);
+		{chunk, Chunk} ->
+			% received a body chunk: append it, and loop to receive next ones
+			body_recv(Req, <<Acc/binary, Chunk/binary>>);
+		end_of_chunks ->
+			% received all body chunks, output to body
+			Req:ok([], "done receiving all body chunks: ~p", [Acc]);
+		{error, Reason} ->
+			Req:ok([], "error reading all body: ~p", [Reason])
 	end.

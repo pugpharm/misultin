@@ -1,5 +1,5 @@
 % ==========================================================================================================
-% MISULTIN - Example: Shows misultin Websocket support.
+% MISULTIN - Sessions Example.
 %
 % >-|-|-(°>
 % 
@@ -27,74 +27,31 @@
 % NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 % POSSIBILITY OF SUCH DAMAGE.
 % ==========================================================================================================
--module(misultin_websocket_example).
+-module(misultin_sessions_example).
 -export([start/1, stop/0]).
 
 % start misultin http server
 start(Port) ->
-	misultin:start_link([{port, Port}, {loop, fun(Req) -> handle_http(Req, Port) end}, {ws_loop, fun(Ws) -> handle_websocket(Ws) end}]).
+	misultin:start_link([{port, Port}, {sessions_expire, 60}, {loop, fun(Req) -> handle_http(Req) end}]).
 
 % stop misultin
 stop() ->
 	misultin:stop().
 
 % callback on request received
-handle_http(Req, Port) ->	
-	% output
-	Req:ok([{"Content-Type", "text/html"}],
-	["	
-	<html>
-		<head>
-			<script type=\"text/javascript\">
-				function addStatus(text){
-					var date = new Date();
-					document.getElementById('status').innerHTML = document.getElementById('status').innerHTML + date + \": \" + text + \"<br>\";				
-				}
-				function ready(){
-					var ws;
-					if (\"WebSocket\" in window) {
-						ws = new WebSocket(\"ws://localhost:", erlang:integer_to_list(Port) ,"/service\");
-					} else if (\"MozWebSocket\" in window) {
-						ws = new MozWebSocket(\"ws://localhost:", erlang:integer_to_list(Port) ,"/service\");
-					}
-					if (ws) {
-						// browser supports websockets
-						ws.onopen = function() {
-							// websocket is connected
-							addStatus(\"websocket connected!\");
-							// send hello data to server.
-							ws.send(\"hello server!\");
-							addStatus(\"sent message to server: 'hello server'!\");
-						};
-						ws.onmessage = function (evt) {
-							var receivedMsg = evt.data;
-							addStatus(\"server sent the following: '\" + receivedMsg + \"'\");
-						};
-						ws.onclose = function() {
-							// websocket was closed
-							addStatus(\"websocket was closed\");
-						};
-					} else {
-						// browser does not support websockets
-						addStatus(\"sorry, your browser does not support websockets.\");
-					}
-				}
-			</script>
-		</head>
-		<body onload=\"ready();\">
-			<div id=\"status\"></div>
-		</body>
-	</html>"]).
-
-% callback on received websockets data
-handle_websocket(Ws) ->
-	receive
-		{browser, Data} ->
-			Ws:send(["received '", Data, "'"]),
-			handle_websocket(Ws);
-		_Ignore ->
-			handle_websocket(Ws)
-	after 5000 ->
-		Ws:send("pushing!"),
-		handle_websocket(Ws)
-	end.
+handle_http(Req) ->
+	% get session info
+	{SessionId, SessionState} = Req:session(),
+	% check state
+	Count = case SessionState of
+		[] ->
+			% no state set previously, init counter
+			1;
+		N ->
+			% increment counter
+			N + 1
+	end,
+	% save counter as session's state. a more complex state can easily be saved here, such as proplist()
+	Req:save_session_state(SessionId, Count),
+	% reply
+	Req:ok([], "Session Id is: ~p, counter is: ~p", [SessionId, Count]).

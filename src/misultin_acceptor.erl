@@ -31,13 +31,13 @@
 % POSSIBILITY OF SUCH DAMAGE.
 % ==========================================================================================================
 -module(misultin_acceptor).
--vsn("0.8-dev").
+-vsn("0.9-dev").
 
 % API
 -export([start_link/6]).
 
 % internal
--export([init/6]).
+-export([init/6,acceptor/8]).
 
 % includes
 -include("../include/misultin.hrl").
@@ -45,11 +45,26 @@
 
 % ============================ \/ API ======================================================================
 
-% Description: Starts the acceptor.
+% Starts the acceptor.
+-spec start_link(
+	MainSupRef::pid(),
+	ListenSocket::socket(),
+	ListenPort::non_neg_integer(),
+	RecvTimeout::non_neg_integer(),
+	SocketMode::socketmode(),
+	CustomOpts::#custom_opts{}) -> {ok, Pid::pid()}.
 start_link(MainSupRef, ListenSocket, ListenPort, RecvTimeout, SocketMode, CustomOpts) ->
 	Pid = proc_lib:spawn_link(?MODULE, init, [MainSupRef, ListenSocket, ListenPort, RecvTimeout, SocketMode, CustomOpts]),
 	{ok, Pid}.
-	
+
+% init
+-spec init(
+	MainSupRef::pid(),
+	ListenSocket::socket(),
+	ListenPort::non_neg_integer(),
+	RecvTimeout::non_neg_integer(),
+	SocketMode::socketmode(),
+	CustomOpts::#custom_opts{}) -> {error, Reason::term()}.
 init(MainSupRef, ListenSocket, ListenPort, RecvTimeout, SocketMode, CustomOpts) ->
 	?LOG_DEBUG("starting new acceptor with pid ~p", [self()]),
 	% get pid of misultin server
@@ -57,19 +72,37 @@ init(MainSupRef, ListenSocket, ListenPort, RecvTimeout, SocketMode, CustomOpts) 
 	case lists:keyfind(server, 1, Childrens) of
 		{server, ServerRef, _, _} ->
 			?LOG_DEBUG("got misultin server pid: ~p", [ServerRef]),
-			acceptor(ServerRef, ListenSocket, ListenPort, RecvTimeout, SocketMode, CustomOpts);
+			% get rfc table ref
+			TableDateRef = misultin_server:get_table_date_ref(ServerRef),
+			?LOG_DEBUG("got misultin table date reference: ~p", [TableDateRef]),
+			% get pid of sessions server
+			case lists:keyfind(sessions, 1, Childrens) of
+				{sessions, SessionsRef, _, _} ->
+					?LOG_DEBUG("got misultin sessions pid: ~p", [SessionsRef]),
+					acceptor(ServerRef, SessionsRef, TableDateRef, ListenSocket, ListenPort, RecvTimeout, SocketMode, CustomOpts);
+				_ ->
+					{error, could_not_get_sessionsref}
+			end;
 		_ ->
 			{error, could_not_get_serverref}
-	end.	
+	end.
 
-% Function: {ok,Pid} | ignore | {error, Error}
-% Description: Starts the socket.
-acceptor(ServerRef, ListenSocket, ListenPort, RecvTimeout, SocketMode, CustomOpts) ->
+% Starts the socket.
+-spec acceptor(
+	ServerRef::pid(),
+	SessionsRef::pid(),
+	TableDateRef::ets:tid(),
+	ListenSocket::socket(),
+	ListenPort::non_neg_integer(),
+	RecvTimeout::non_neg_integer(),
+	SocketMode::socketmode(),
+	CustomOpts::#custom_opts{}) -> [].
+acceptor(ServerRef, SessionsRef, TableDateRef, ListenSocket, ListenPort, RecvTimeout, SocketMode, CustomOpts) ->
 	case catch misultin_socket:accept(ListenSocket, SocketMode) of
 		{ok, Sock} when SocketMode =:= http ->
 			?LOG_DEBUG("received a new http request, spawning a controlling process",[]),
 			Pid = spawn(fun() ->
-				activate_controller_process(ServerRef, Sock, ListenPort, RecvTimeout, SocketMode, CustomOpts)
+				activate_controller_process(ServerRef, SessionsRef, TableDateRef, Sock, ListenPort, RecvTimeout, SocketMode, CustomOpts)
 			end),
 			% set controlling process
 			case misultin_socket:controlling_process(Sock, Pid, SocketMode) of
@@ -77,22 +110,22 @@ acceptor(ServerRef, ListenSocket, ListenPort, RecvTimeout, SocketMode, CustomOpt
 					Pid ! set;
 				{error, _Reason} ->
 					?LOG_ERROR("could not set controlling process: ~p, closing socket", [_Reason]),
-					catch misultin_socket:close(Sock, SocketMode)
+					misultin_socket:close(Sock, SocketMode)
 			end,					
 			% get back to accept loop
-			acceptor(ServerRef, ListenSocket, ListenPort, RecvTimeout, SocketMode, CustomOpts);
+			?MODULE:acceptor(ServerRef, SessionsRef, TableDateRef, ListenSocket, ListenPort, RecvTimeout, SocketMode, CustomOpts);
 		{ok, Sock} ->
 			?LOG_DEBUG("received a new https request, spawning a controlling process",[]),
 			Pid = spawn(fun() ->
 				case ssl:ssl_accept(Sock, 60000) of
 					ok ->
-						activate_controller_process(ServerRef, Sock, ListenPort, RecvTimeout, SocketMode, CustomOpts);
+						activate_controller_process(ServerRef, SessionsRef, TableDateRef, Sock, ListenPort, RecvTimeout, SocketMode, CustomOpts);
 					{ok, NewSock} ->
-						activate_controller_process(ServerRef, NewSock, ListenPort, RecvTimeout, SocketMode, CustomOpts);
+						activate_controller_process(ServerRef, SessionsRef, TableDateRef, NewSock, ListenPort, RecvTimeout, SocketMode, CustomOpts);
 					{error, _Reason} ->
 						% could not negotiate a SSL transaction, leave process
 						?LOG_WARNING("could not negotiate a SSL transaction: ~p", [_Reason]),
-						catch misultin_socket:close(Sock, SocketMode)
+						misultin_socket:close(Sock, SocketMode)
 				end
 			end),
 			% set controlling process
@@ -101,14 +134,14 @@ acceptor(ServerRef, ListenSocket, ListenPort, RecvTimeout, SocketMode, CustomOpt
 					Pid ! set;
 				{error, _Reason} ->
 					?LOG_ERROR("could not set controlling process: ~p, closing socket", [_Reason]),
-					catch misultin_socket:close(Sock, SocketMode)
+					misultin_socket:close(Sock, SocketMode)
 			end,
 			% get back to accept loop
-			acceptor(ServerRef, ListenSocket, ListenPort, RecvTimeout, SocketMode, CustomOpts);
+			?MODULE:acceptor(ServerRef, SessionsRef, TableDateRef, ListenSocket, ListenPort, RecvTimeout, SocketMode, CustomOpts);
 		{error, _Error} ->
 			?LOG_WARNING("accept failed with error: ~p", [_Error]),
 			% get back to accept loop
-			acceptor(ServerRef, ListenSocket, ListenPort, RecvTimeout, SocketMode, CustomOpts);
+			?MODULE:acceptor(ServerRef, SessionsRef, TableDateRef, ListenSocket, ListenPort, RecvTimeout, SocketMode, CustomOpts);
 		{'EXIT', Error} ->
 			?LOG_ERROR("accept exited with error: ~p, quitting process", [Error]),
 			exit({error, {accept_failed, Error}})
@@ -120,36 +153,117 @@ acceptor(ServerRef, ListenSocket, ListenPort, RecvTimeout, SocketMode, CustomOpt
 % ============================ \/ INTERNAL FUNCTIONS =======================================================
 
 % activate the controller pid
-activate_controller_process(ServerRef, Sock, ListenPort, RecvTimeout, SocketMode, CustomOpts) ->
+-spec activate_controller_process(
+	ServerRef::pid(),
+	SessionsRef::pid(),
+	TableDateRef::ets:tid(),
+	Sock::socket(),
+	ListenPort::non_neg_integer(),
+	RecvTimeout::non_neg_integer(),
+	SocketMode::socketmode(),
+	CustomOpts::#custom_opts{}) -> ok.
+activate_controller_process(ServerRef, SessionsRef, TableDateRef, Sock, ListenPort, RecvTimeout, SocketMode, CustomOpts) ->
 	receive
 		set ->
 			?LOG_DEBUG("activated controlling process ~p", [self()]),
-			open_connections_switch(ServerRef, Sock, ListenPort, RecvTimeout, SocketMode, CustomOpts)
+			open_connections_switch(ServerRef, SessionsRef, TableDateRef, Sock, ListenPort, RecvTimeout, SocketMode, CustomOpts)
 	after 60000 ->
 		?LOG_ERROR("timeout waiting for set in controlling process, closing socket", []),
-		catch misultin_socket:close(Sock, SocketMode)
+		misultin_socket:close(Sock, SocketMode)
 	end.
 
 % manage open connection
-open_connections_switch(ServerRef, Sock, ListenPort, RecvTimeout, SocketMode, CustomOpts) ->
+-spec open_connections_switch(
+	ServerRef::pid(),
+	SessionsRef::pid(),
+	TableDateRef::ets:tid(),
+	Sock::socket(),
+	ListenPort::non_neg_integer(),
+	RecvTimeout::non_neg_integer(),
+	SocketMode::socketmode(),
+	CustomOpts::#custom_opts{}) -> ok.
+open_connections_switch(ServerRef, SessionsRef, TableDateRef, Sock, ListenPort, RecvTimeout, SocketMode, CustomOpts) ->
 	case misultin_server:http_pid_ref_add(ServerRef, self()) of
-		{ok, HttpMonRef} ->
+		ok ->
 			% get peer address and port
-			{PeerAddr, PeerPort} = misultin_socket:peername(Sock, SocketMode),
-			?LOG_DEBUG("remote peer is ~p", [{PeerAddr, PeerPort}]),
-			% get peer certificate, if any
-			PeerCert = misultin_socket:peercert(Sock, SocketMode),
-			?LOG_DEBUG("remote peer certificate is ~p", [PeerCert]),
-			% jump to external callback
-			?LOG_DEBUG("jump to connection logic", []),
-			misultin_http:handle_data(ServerRef, Sock, SocketMode, ListenPort, PeerAddr, PeerPort, PeerCert, RecvTimeout, CustomOpts),
-			% remove pid reference and demonitor
-			misultin_server:http_pid_ref_remove(ServerRef, self(), HttpMonRef);
+			case get_peer_addr_port(Sock, SocketMode, CustomOpts) of
+				{ok, {PeerAddr, PeerPort}} ->
+					?LOG_DEBUG("remote peer is ~p", [{PeerAddr, PeerPort}]),
+					% get peer certificate, if any
+					PeerCert = misultin_socket:peercert(Sock, SocketMode),
+					?LOG_DEBUG("remote peer certificate is ~p", [PeerCert]),
+					% jump to external callback
+					?LOG_DEBUG("jump to connection logic", []),
+					misultin_http:handle_data(ServerRef, SessionsRef, TableDateRef, Sock, SocketMode, ListenPort, PeerAddr, PeerPort, PeerCert, RecvTimeout, CustomOpts),
+					ok;
+				{error, Msg} ->
+					?LOG_DEBUG("error reading PROXY line for IP address info",[]),
+					send_error_message_and_close(502, Msg, Sock, SocketMode, TableDateRef, CustomOpts)
+			end;
 		{error, _Reason} ->
 			% too many open connections, send error and close [spawn to avoid locking]
-			?LOG_WARNING("~p, refusing new request", [_Reason]),
-			misultin_socket:send(Sock, [misultin_utility:get_http_status_code(503), <<"Connection: Close\r\n\r\n">>], SocketMode),
-			misultin_socket:close(Sock, SocketMode)
+			?LOG_DEBUG("~p, refusing new request", [_Reason]),
+			send_error_message_and_close(503, "Server is experiencing heavy load, please try again in a few minutes.", Sock, SocketMode, TableDateRef, CustomOpts)
 	end.
 
 % ============================ /\ INTERNAL FUNCTIONS =======================================================
+
+% send error message
+-spec send_error_message_and_close(HttpCode::non_neg_integer(), Msg::iolist(), Sock::socket(), SocketMode::socketmode(), TableDateRef::ets:tid(), CustomOpts::#custom_opts{}) -> ok.
+send_error_message_and_close(HttpCode, Msg, Sock, SocketMode, TableDateRef, CustomOpts) ->
+	{PeerAddr, PeerPort} = misultin_socket:peername(Sock, SocketMode),
+	Msg0 = misultin_http:build_error_message(HttpCode, #req{peer_addr = PeerAddr, peer_port = PeerPort, connection = close}, TableDateRef, CustomOpts#custom_opts.access_log, Msg),
+	misultin_socket:send(Sock, Msg0, SocketMode),
+	misultin_socket:close(Sock, SocketMode).
+
+% get peer address
+-spec get_peer_addr_port(Sock::socket(), SocketMode::socketmode(), CustomOpts::#custom_opts{}) -> {ok, {PeerAddr::inet:ip_address(), PeerPort::non_neg_integer()}} | {error, term()}.
+get_peer_addr_port(Sock, SocketMode, CustomOpts) ->
+	case CustomOpts#custom_opts.proxy_protocol of
+		false ->
+			% no proxy, return info
+			{ok, misultin_socket:peername(Sock, SocketMode)};
+		true ->
+			% proxy, read info
+			peername_from_proxy_line(Sock, SocketMode)
+	end.
+
+% receive the first line, and extract peer address details as per http://haproxy.1wt.eu/download/1.5/doc/proxy-protocol.txt
+-spec peername_from_proxy_line(Sock::socket(), SocketMode::socketmode()) -> {ok, {PeerAddr::inet:ip_address(), PeerPort::non_neg_integer()}} | {error, term()}.
+peername_from_proxy_line(Sock, SocketMode) ->
+	%% Temporary socket options for reading PROXY line:
+	misultin_socket:setopts(Sock, [{active, once}, {packet, line}, list], SocketMode),
+	Val = parse_peername_from_proxy_line(Sock),
+	%% Set socket options back to previous values, set in misultin.erl
+	misultin_socket:setopts(Sock, [{active, false}, {packet, raw}, binary], SocketMode),
+	Val.
+
+-spec parse_peername_from_proxy_line(Sock::socket()) -> {ok, {PeerAddr::inet:ip_address(), PeerPort::non_neg_integer()}} | {error, term()}.
+parse_peername_from_proxy_line(Sock) ->
+	receive
+		{TcpOrSsl, Sock, "PROXY " ++ ProxyLine} when TcpOrSsl =:= tcp; TcpOrSsl =:= ssl ->
+			case string:tokens(ProxyLine, "\r\n ") of
+				[_Proto, SrcAddrStr, _DestAddr, SrcPortStr, _DestPort] ->
+					{SrcPort, _}  = string:to_integer(SrcPortStr),
+					{ok, SrcAddr} = inet_parse:address(SrcAddrStr),
+					?LOG_DEBUG("got peer address from proxy line: ~p", [{SrcAddr, SrcPort}]),
+					{ok, {SrcAddr, SrcPort}};
+				_ ->
+					?LOG_DEBUG("got malformed proxy line: ~p", [ProxyLine]),
+					{error, "got malformed proxy line: ~p", [ProxyLine]}
+			end;
+		{_, Sock, FirstLine} -> 
+			?LOG_DEBUG("first line not 'PROXY', but 'PROXY ...' expected due to config option; line was: '~s'", [FirstLine]),
+			{error, ["<h2>PROXY line expected</h2>",
+				"Misultin configured to expect PROXY line first, as per ",
+				"<a href=\"http://haproxy.1wt.eu/download/1.5/doc/proxy-protocol.txt\">the haproxy proxy protocol spec</a>, ",
+				"but first line received was:<br/><pre>\r\n",
+				FirstLine,
+				"\r\n</pre>"]};
+		Other ->
+			?LOG_DEBUG("got from proxy unexpected: ~p", [Other]),
+			{error, "got from proxy unexpected: ~p", [Other]}
+	after 5000 ->
+		?LOG_DEBUG("timeout receiving PROXY line from upstream proxy, closing",[]),
+		{error, "timeout on receiving proxy line from upstream proxy"}
+	end.

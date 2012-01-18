@@ -1,5 +1,5 @@
 % ==========================================================================================================
-% MISULTIN - Example: Show how to set/retrieve cookies.
+% MISULTIN - Example: RESTful support.
 %
 % >-|-|-(°>
 % 
@@ -27,7 +27,11 @@
 % NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 % POSSIBILITY OF SUCH DAMAGE.
 % ==========================================================================================================
--module(misultin_cookies_example).
+
+% point your browser to http://localhost:8080/users/こんにちは and you should see:
+% This is こんにちは's page.
+
+-module(misultin_rest_utf8).
 -export([start/1, stop/0]).
 
 % start misultin http server
@@ -38,16 +42,43 @@ start(Port) ->
 stop() ->
 	misultin:stop().
 
-% callback on request received
-handle_http(Req) ->	
-	% get cookies
-	Cookies = Req:get_cookies(),
-	case Req:get_cookie_value("misultin_test_cookie", Cookies) of
-		undefined ->
-			% no cookies preexists, create one that will expire in 365 days
-			Req:set_cookie("misultin_test_cookie", "value of the test cookie", [{max_age, 365*24*3600}]),
-			Req:ok("A cookie has been set. Refresh the browser to see it.");
-		CookieVal ->
-			Req:delete_cookie("misultin_test_cookie"),
-			Req:ok(["The set cookie value was set to \"", CookieVal,"\", and has now been removed. Refresh the browser to see this."])
-	end.
+% callback function called on incoming http request
+handle_http(Req) ->
+	% dispatch to rest
+	handle(Req:get(method), Req:resource([lowercase, urldecode]), Req).
+
+% ---------------------------- \/ handle rest --------------------------------------------------------------
+
+% handle a GET on /
+handle('GET', [], Req) ->
+	template(Req, "Main  home page.");
+
+% handle a GET on /users
+handle('GET', ["users"], Req) ->
+	template(Req, "Main users root.");
+
+% handle a GET on /users/{username}
+handle('GET', ["users", UserName], Req) ->
+	template(Req, ["This is ", UserName, "'s page."]);
+
+% handle a GET on /users/{username}/messages
+handle('GET', ["users", UserName, "messages"], Req) ->
+	template(Req, ["This is ", UserName, "'s messages page."]);
+
+% handle the 404 page not found
+handle(_, _, Req) ->
+	template(Req, "Page not found.").
+	
+% ---------------------------- /\ handle rest --------------------------------------------------------------
+
+
+
+% ---------------------------- \/ template -----------------------------------------------------------------
+
+% returns the template
+template(Req, Content) ->
+	Req:ok([{"Content-Type", "text/html"}], ["<head>
+		<meta http-equiv = \"content-type\" content=\"text/html; charset=UTF-8\">
+	</head><body>", Content, "</body></html>"]).	
+
+% ---------------------------- /\ template -----------------------------------------------------------------

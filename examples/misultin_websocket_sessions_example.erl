@@ -1,5 +1,5 @@
 % ==========================================================================================================
-% MISULTIN - Example: Shows misultin Websocket support.
+% MISULTIN - Websocket Sessions Example.
 %
 % >-|-|-(°>
 % 
@@ -27,7 +27,7 @@
 % NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 % POSSIBILITY OF SUCH DAMAGE.
 % ==========================================================================================================
--module(misultin_websocket_example).
+-module(misultin_websocket_sessions_example).
 -export([start/1, stop/0]).
 
 % start misultin http server
@@ -39,7 +39,11 @@ stop() ->
 	misultin:stop().
 
 % callback on request received
-handle_http(Req, Port) ->	
+handle_http(Req, Port) ->
+	% get session info
+	{SessionId, _SessionState} = Req:session(),
+	% save user's peer_addr and a resetted counter as session's state. a more complex state can easily be saved here, such as proplist()
+	Req:save_session_state(SessionId, {Req:get(peer_addr), 1}),
 	% output
 	Req:ok([{"Content-Type", "text/html"}],
 	["	
@@ -88,6 +92,8 @@ handle_http(Req, Port) ->
 
 % callback on received websockets data
 handle_websocket(Ws) ->
+	% get session info
+	{SessionId, {UserPeerAddr, Count}} = Ws:session(),
 	receive
 		{browser, Data} ->
 			Ws:send(["received '", Data, "'"]),
@@ -95,6 +101,10 @@ handle_websocket(Ws) ->
 		_Ignore ->
 			handle_websocket(Ws)
 	after 5000 ->
-		Ws:send("pushing!"),
+		% increase pushed counter and save new sessin state
+		Ws:save_session_state(SessionId, {UserPeerAddr, Count + 1}),
+		% build push message
+		Pushmessage = lists:flatten(io_lib:format("pushed ~p time(s) for user with session IP: ~p", [Count, UserPeerAddr])),
+		Ws:send(Pushmessage),
 		handle_websocket(Ws)
 	end.

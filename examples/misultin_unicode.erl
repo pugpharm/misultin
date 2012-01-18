@@ -1,5 +1,5 @@
 % ==========================================================================================================
-% MISULTIN - Example: Show how to set/retrieve cookies.
+% MISULTIN - Example: Unicode strings.
 %
 % >-|-|-(°>
 % 
@@ -27,7 +27,7 @@
 % NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 % POSSIBILITY OF SUCH DAMAGE.
 % ==========================================================================================================
--module(misultin_cookies_example).
+-module(misultin_unicode).
 -export([start/1, stop/0]).
 
 % start misultin http server
@@ -38,16 +38,45 @@ start(Port) ->
 stop() ->
 	misultin:stop().
 
-% callback on request received
-handle_http(Req) ->	
-	% get cookies
-	Cookies = Req:get_cookies(),
-	case Req:get_cookie_value("misultin_test_cookie", Cookies) of
+% callback function called on incoming http request
+handle_http(Req) ->
+	% dispatch to rest
+	handle(Req:get(method), Req:resource([lowercase, urldecode]), Req).
+
+% handle a GET on /
+handle('GET', [], Req) ->
+	Req:ok([{"Content-Type", "text/html"}], ["<html>
+<head>
+	<meta http-equiv=\"content-type\" content=\"text/html; charset=UTF-8\">
+</head>
+<body>
+	<form action=\"/\" method=\"post\">
+		<input type=\"hidden\" name=\"data\" value=\"こんにちは\">
+		<input type=\"submit\" value=\"GO!\">
+	</form>
+</body>
+</html>"]);
+
+% handle POST submit on /
+handle('POST', [], Req) ->
+	Args = Req:parse_post(unicode),
+	case Req:get_variable("data", Args) of
 		undefined ->
-			% no cookies preexists, create one that will expire in 365 days
-			Req:set_cookie("misultin_test_cookie", "value of the test cookie", [{max_age, 365*24*3600}]),
-			Req:ok("A cookie has been set. Refresh the browser to see it.");
-		CookieVal ->
-			Req:delete_cookie("misultin_test_cookie"),
-			Req:ok(["The set cookie value was set to \"", CookieVal,"\", and has now been removed. Refresh the browser to see this."])
-	end.
+			Req:ok("No data value submitted.");
+		Value ->
+			% we have specified an unicode encoding, so ensure we convert the list back to binary before sending it down the socket
+			ValueBin = unicode:characters_to_binary(Value),
+			Req:ok([{"Content-Type", "text/html"}], ["<html>
+<head>
+	<meta http-equiv=\"content-type\" content=\"text/html; charset=UTF-8\">
+</head>
+<body>
+	<p>Unicode string is: \"", ValueBin, "\", and its length is ", integer_to_list(length(Value)), "
+</body>
+</html>"])
+	end;
+	
+% handle the 404 page not found
+handle(_, _, Req) ->
+	Req:ok("Page not found.").
+
