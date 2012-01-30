@@ -29,7 +29,7 @@
 % POSSIBILITY OF SUCH DAMAGE.
 % ==========================================================================================================
 -module(misultin_utility).
--vsn("0.9-dev").
+-vsn("0.9").
 
 % API
 -export([get_http_status_code/2, get_http_status_message/1, get_content_type/1, get_key_value/2, header_get_value/2]).
@@ -419,7 +419,7 @@ get_key_value(Key, List) ->
 	end.
 
 % Find atom Tag in Headers, Headers being both atoms [for known headers] and strings. Comparison on string Header Tags is case insensitive.
--spec header_get_value(Tag::atom(), Headers::http_headers()) -> false | string() | false.
+-spec header_get_value(Tag::atom(), Headers::http_headers()) -> string() | false.
 header_get_value(Tag, Headers) when is_atom(Tag) ->
 	case lists:keyfind(Tag, 1, Headers) of
 		false ->
